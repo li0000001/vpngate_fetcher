@@ -1,64 +1,86 @@
+import streamlit as st
 import pandas as pd
 import requests
 import io
 import base64
 
-def fetch_and_parse_vpngate():
-    # 1. VPN Gate 官方公开的实时 CSV 数据接口
+# 1. 设置网页标题和图标
+st.set_page_config(page_title="VPN Gate 节点抓取器", page_icon="🌐", layout="wide")
+st.title("🌐 VPN Gate 实时节点抓取与解析器")
+st.caption("数据实时同步自日本筑波大学 VPN Gate 官方公开接口")
+
+# 2. 放置一个刷新按钮
+if st.button("🔄 立即抓取最新节点", type="primary") or 'df_nodes' not in st.session_state:
+    
     url = "https://www.vpngate.net/api/iphone/"
     
-    print("正在从 vpngate.net 抓取最新节点列表，请稍候...")
-    try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"❌ 抓取失败，请检查网络连接或代理设置。错误信息: {e}")
-        return
-
-    # 2. 清洗数据：VPN Gate 返回的前两行是版权声明，最后一行是感叹号，需要剔除
-    lines = response.text.splitlines()
-    if len(lines) < 4:
-        print("❌ 获取到的数据格式不正确。")
-        return
-        
-    # 保留核心的 CSV 数据行
-    csv_data = "\n".join(lines[1:-1])
-
-    # 3. 使用 pandas 解析 CSV 数据
-    # 字段包含：HostName, IP, Score, Ping, Speed, CountryLong, OpenVPN_ConfigData_Base64 等
-    df = pd.read_csv(io.StringIO(csv_data))
-
-    # 4. 数据类型转换与排序（将速度和延迟转为数字，按分数/速度降序排列）
-    df['Speed'] = pd.to_numeric(df['Speed'], errors='coerce')
-    df['Ping'] = pd.to_numeric(df['Ping'], errors='coerce')
-    
-    # 筛选出含有 OpenVPN 配置且速度不为空的节点，并按速度从大到小排序
-    df_sorted = df.dropna(subset=['OpenVPN_ConfigData_Base64', 'Speed']).sort_values(by='Speed', ascending=False)
-
-    # 5. 输出前 3 个最优节点的信息
-    top_n = 3
-    print(f"\n======== 已为您筛选出速度最快的前 {top_n} 个节点 ========\n")
-    
-    for index, row in df_sorted.head(top_n).iterrows():
-        # 转换网速单位 (bps -> Mbps)
-        speed_mbps = round(row['Speed'] / 1024 / 1024, 2)
-        
-        print(f"【节点 #{index + 1}】")
-        print(f"国家/地区: {row['CountryLong']}")
-        print(f"IP 地址:   {row['IP']}")
-        print(f"Ping 延迟: {row['Ping']} ms")
-        print(f"当前网速:  {speed_mbps} Mbps")
-        
-        # 解码 OpenVPN 配置文件文本
+    with st.spinner("正在从 vpngate.net 抓取并解析数据，请稍候..."):
         try:
-            ovpn_config = base64.b64decode(row['OpenVPN_ConfigData_Base64']).decode('utf-8')
-            # 打印配置文件的片段（前 3 行示范）
-            config_preview = "\n".join(ovpn_config.splitlines()[:3])
-            print(f"配置预览:\n{config_preview}\n  ... (此处省略其余配置代码) ...")
-        except Exception:
-            print("配置文件解码失败")
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
             
-        print("-" * 50)
+            # 清洗 CSV 数据
+            lines = response.text.splitlines()
+            if len(lines) >= 4:
+                csv_data = "\n".join(lines[1:-1])
+                
+                # 用 Pandas 处理
+                df = pd.read_csv(io.StringIO(csv_data))
+                df['Speed'] = pd.to_numeric(df['Speed'], errors='coerce')
+                df['Ping'] = pd.to_numeric(df['Ping'], errors='coerce')
+                
+                # 过滤并按网速排序
+                df_sorted = df.dropna(subset=['OpenVPN_ConfigData_Base64', 'Speed']).sort_values(by='Speed', ascending=False)
+                
+                # 将网速单位转换为 Mbps
+                df_sorted['Speed (Mbps)'] = round(df_sorted['Speed'] / 1024 / 1024, 2)
+                
+                # 存入 session_state 缓存
+                st.session_state['df_nodes'] = df_sorted
+                st.success("✅ 数据抓取成功！")
+            else:
+                st.error("❌ 官方返回的数据格式有误。")
+        except Exception as e:
+            st.error(f"❌ 抓取失败！可能 Streamlit 服务器目前无法连接到 vpngate.net。错误信息: {e}")
 
-if __name__ == "__main__":
-    fetch_and_parse_vpngate()
+# 3. 渲染数据到网页
+if 'df_nodes' in st.session_state:
+    df_display = st.session_state['df_nodes']
+    
+    # 展示核心数据表格
+    st.subheader("📊 节点概览（已按网速降序排列）")
+    st.dataframe(
+        df_display[['CountryLong', 'IP', 'Speed (Mbps)', 'Ping', 'Operator']], 
+        column_config={
+            "CountryLong": "国家/地区",
+            "IP": "IP 地址",
+            "Speed (Mbps)": "网速 (Mbps)",
+            "Ping": "延迟 (ms)",
+            "Operator": "提供者"
+        },
+        use_container_width=True
+    )
+    
+    # 允许查看详情并下载配置文件
+    st.subheader("📥 热门节点配置文件下载（Top 3）")
+    top_nodes = df_display.head(3)
+    
+    cols = st.columns(3)
+    for idx, (index, row) in enumerate(top_nodes.iterrows()):
+        with cols[idx]:
+            st.info(f"**排名 #{idx+1}：{row['CountryLong']}**")
+            st.write(f"📍 IP: `{row['IP']}`")
+            st.write(f"⚡ 网速: `{row['Speed (Mbps)']} Mbps` | ⏱️ 延迟: `{row['Ping']} ms`")
+            
+            # 解码并转换为下载按钮
+            try:
+                ovpn_config = base64.b64decode(row['OpenVPN_ConfigData_Base64']).decode('utf-8')
+                st.download_button(
+                    label=f"📥 下载 .ovpn 配置文件",
+                    data=ovpn_config,
+                    file_name=f"vpngate_{row['IP']}.ovpn",
+                    mime="application/x-openvpn-profile",
+                    key=f"dl_{index}"
+                )
+            except:
+                st.write("配置文件解析失败")
