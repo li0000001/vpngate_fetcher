@@ -130,7 +130,7 @@ if 'aimili_nodes' in st.session_state:
                 
                 # 核心高级网络参数展示
                 st.markdown("**🌐 链路端口参数**")
-                st.code(f"IP 地址 : {row['ip']}\n网络端口 : {row['port']}\n传输协议 : {row['protocol']}\n所有者   : {row['operator']}", language="properties")
+                st.code(f"IP 地址 : {row['ip']}\n传输协议 : {row['protocol']}\n所有者   : {row['operator']}", language="properties")
                 
                 st.markdown("**⚡ 质量与负载指标**")
                 st.write(f"▪️ 出口带宽：`{row['speed_mbps']} Mbps`")
